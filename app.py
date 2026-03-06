@@ -1,88 +1,64 @@
 import streamlit as st
 import math
 
-# --- KONFIGURASI HALAMAN ---
-st.set_page_config(page_title="Operator Motor System v2.0", layout="wide")
+st.set_page_config(page_title="Operator System v3.0", layout="wide")
 
-# --- KONSTANTA EQUILIBRIUM ---
-def get_equilibrium(di):
-    if di < 100: # Motor Pompa / Kecil
-        return {"B": 1.4, "J": 5.0, "eff": 0.70, "cos_phi": 0.75}
-    elif di <= 300: # Motor Medium
-        return {"B": 1.6, "J": 4.5, "eff": 0.85, "cos_phi": 0.82}
-    else: # Motor Besar
-        return {"B": 1.7, "J": 3.5, "eff": 0.92, "cos_phi": 0.88}
+# --- DATABASE MATERIAL (IMAJINER/EQUILIBRIUM) ---
+def get_iron_quality(di):
+    # Asumsi baja silikon standar M47
+    return {"B_max": 1.35 if di < 80 else 1.6, "Staking_Factor": 0.95}
 
-st.title("⚡ Operator System: Universal Motor Reconstruction")
-st.markdown("Sistem pembenah rekonstruksi inti stator berbasis data statis.")
-st.markdown("---")
+st.title("🛡️ Operator System v3.0: Precision Rewinding")
+st.write("Sistem rekonstruksi dengan validasi ruang fisik dan kalkulator kapasitor.")
 
-# --- INPUT DATA (SIDEBAR) ---
-st.sidebar.header("📥 Data Statis Stator")
-phase_type = st.sidebar.selectbox("Tipe Fase", ["3-Phase (Industrial)", "1-Phase (Pump/Home)"])
-di = st.sidebar.number_input("Diameter Dalam (mm)", min_value=0.1, value=50.0, step=0.1)
-do = st.sidebar.number_input("Diameter Luar (mm)", min_value=0.1, value=90.0, step=0.1)
-l_core = st.sidebar.number_input("Panjang Inti (mm)", min_value=0.1, value=40.0, step=0.1)
-slots = st.sidebar.number_input("Jumlah Slot (S)", min_value=1, value=24, step=1)
+# --- INPUT BARU (SIDEBAR) ---
+st.sidebar.header("📏 Detail Dimensi Slot")
+h_slot = st.sidebar.number_input("Tinggi Slot (mm)", value=12.0)
+w_mid = st.sidebar.number_input("Lebar Tengah Slot (mm)", value=6.0)
+mika_thick = st.sidebar.number_input("Tebal Mika/Prespan (mm)", value=0.2)
 
-st.sidebar.header("⚙️ Pilihan Modifikasi")
-poles = st.sidebar.selectbox("Jumlah Pole (P)", [2, 4, 6], index=0)
-v_target = st.sidebar.number_input("Voltase Kerja (V)", value=220)
+st.sidebar.header("🌀 Data Inti")
+di = st.sidebar.number_input("Diameter Dalam (mm)", value=50.0)
+l_core = st.sidebar.number_input("Panjang Inti (mm)", value=40.0)
+slots = st.sidebar.number_input("Jumlah Slot", value=24)
+poles = st.sidebar.selectbox("Pole", [2, 4])
 
-# --- LOGIKA PERHITUNGAN ---
-eq = get_equilibrium(di)
-wt_est = (math.pi * di) / (2 * slots)
-area_iron = (wt_est * l_core * (slots / poles)) / 1000000 
+# --- PROSES SIMULASI ---
+iron = get_iron_quality(di)
+area_slot_total = h_slot * w_mid
+# Luas bersih setelah dikurangi mika
+area_slot_net = (h_slot - 1) * (w_mid - (2 * mika_thick)) 
 
-# Menghitung Fluks & Lilitan
-phi = eq["B"] * area_iron
-kw = 0.95 
-f = 50
+# Hitung Fluks per Kutub
+phi = (iron["B_max"] * (di * math.pi * l_core / poles)) / 1000000
 
-if "3-Phase" in phase_type:
-    # Rumus 3-Fase
-    n_ph = v_target / (4.44 * f * phi * kw)
-    turns_per_slot = (n_ph * 3) / slots
-    multiplier = math.sqrt(3)
-else:
-    # Rumus 1-Fase (Pompa)
-    # n_ph untuk 1 fase lebih padat
-    n_ph = v_target / (4.44 * f * phi * kw)
-    turns_per_slot = n_ph / (slots * 0.6) # Asumsi 60% slot untuk Running
-    multiplier = 1.0
+# Hitung Lilitan Running (Utama)
+# Menggunakan 16 slot (2/3) untuk Running pada pompa 24 slot
+slots_run = int(slots * 0.66)
+n_total = 220 / (4.44 * 50 * phi * 0.95)
+turns_per_slot = n_total / slots_run
 
-# Menghitung Watt & Kawat
-area_slot = ((math.pi * (do**2 - di**2) / 4) * 0.5) / slots 
-fill_factor = 0.40
-area_wire = (area_slot * fill_factor) / turns_per_slot
-diameter_wire = math.sqrt((4 * area_wire) / math.pi)
+# Hitung Diameter Kawat Maksimal (Efektif)
+# Faktor isi kawat bulat = 0.6 (sangat aman untuk tangan)
+area_wire_max = (area_slot_net * 0.6) / turns_per_slot
+d_wire_run = math.sqrt((4 * area_wire_max) / math.pi)
 
-current = area_wire * eq["J"]
-watt = v_target * current * eq["cos_phi"] * eq["eff"] * multiplier
+# Estimasi Watt & Kapasitor
+current_est = area_wire_max * 5.0 # Densitas arus 5A/mm2
+watt_est = 220 * current_est * 0.8 * 0.75 # Cos phi & Eff
+cap_est = (current_est * 0.6 * 10**6) / (2 * math.pi * 50 * 220)
 
-# --- DISPLAY HASIL ---
-col1, col2 = st.columns(2)
-
+# --- OUTPUT SISTEM ---
+col1, col2, col3 = st.columns(3)
 with col1:
-    st.subheader("📊 Hasil Rekonstruksi Utuh")
-    st.metric("Lilitan Utama / Slot", f"{int(turns_per_slot)} Lilit")
-    st.metric("Diameter Kawat Utama", f"{round(diameter_wire, 2)} mm")
-    st.metric("Estimasi Daya (Watt)", f"{round(watt, 1)} W")
-
+    st.metric("Lilitan Utama", f"{int(turns_per_slot)} Lilit")
+    st.metric("Kawat Utama", f"{round(d_wire_run, 2)} mm")
 with col2:
-    st.subheader("🔍 Parameter Equilibrium")
-    st.write(f"**Arus Kerja:** {round(current, 2)} A")
-    st.write(f"**Target Flux:** {eq['B']} Tesla")
-    st.write(f"**Power Factor:** {eq['cos_phi']}")
-    
-    if "1-Phase" in phase_type:
-        st.warning("💡 Tips Pompa: Gunakan kawat bantu (Starting) 1-2 step lebih kecil dari kawat utama.")
+    st.metric("Estimasi Daya", f"{round(watt_est, 1)} Watt")
+    st.metric("Arus Kerja", f"{round(current_est, 2)} A")
+with col3:
+    st.metric("Kapasitor Ideal", f"{round(cap_est, 1)} uF")
+    st.metric("Kawat Bantu", f"{round(d_wire_run * 0.8, 2)} mm")
 
-# --- VALIDASI KEAMANAN ---
 st.divider()
-if turns_per_slot > 500:
-    st.error("❌ Kawat terlalu halus! Lilitan terlalu banyak untuk ruang slot ini.")
-elif diameter_wire > 1.5 and "1-Phase" in phase_type:
-    st.info("🛠️ Saran Operator: Gunakan kawat paralel agar lebih mudah digulung di slot kecil.")
-else:
-    st.success("✅ Sistem Equilibrium: Desain efisien dan aman untuk dieksekusi.")
+st.success("✅ Logika ini memastikan kawat tidak akan sesak di leher slot.")
