@@ -1,94 +1,79 @@
 import streamlit as st
 import math
 
-# --- KONFIGURASI HALAMAN MOBILE-FIRST ---
-st.set_page_config(
-    page_title="Operator Motor System v4.5", 
-    layout="centered", # Centered lebih baik untuk HP dibanding Wide
-    initial_sidebar_state="collapsed"
-)
+st.set_page_config(page_title="Operator System v6.0", layout="centered")
 
-# --- FUNGSI EQUILIBRIUM (VERIFIED LOGIC) ---
-def calculate_precision_rewinding(di, do, l_core, slots, poles, v_target, phase_type):
-    # Estimasi luas slot berdasarkan geometri annular
-    total_annular_area = (math.pi * (do**2 - di**2) / 4)
-    area_per_slot = (total_annular_area * 0.45) / slots
+def calculate_honest_rewinding(di, do, l_c, s, p, v, pt):
+    # Konstanta Kejujuran Fisik
+    f, kw = 50, 0.95
+    # Pembatasan Tesla berdasarkan ukuran (Semakin kecil semakin rendah)
+    b_limit = 1.25 if di < 60 else 1.45
     
-    # Penentuan Densitas Arus (J) & Flux (B) otomatis
-    if di < 75: # Klasifikasi Pompa/Motor Kecil
-        j_limit = 3.2 
-        target_b = 1.32 
-        slot_fill = 0.28 # Ruang lega untuk mika manual
-    else: # Klasifikasi Industri
-        j_limit = 4.2
-        target_b = 1.58
-        slot_fill = 0.35
-
-    # Logika Magnetik
-    phi = (target_b * (di * math.pi * l_core / poles)) / 1000000
-    kw, f = 0.95, 50
+    # 1. Hitung Fluks
+    phi = (b_limit * (di * math.pi * l_c / p)) / 1000000
     
-    if "1-Phase" in phase_type:
-        n_total = v_target / (4.44 * f * phi * kw)
-        turns_per_slot = n_total / (slots * 0.6) # 60% slot untuk Running
-        eff, cos_phi = 0.72, 0.75
-        multiplier = 1.0
+    if "1-Phase" in pt:
+        # --- LOGIKA KHUSUS POMPA AIR ---
+        # Lilitan Utama (Running) - Menggunakan 2/3 total slot
+        n_run_total = v / (4.44 * f * phi * kw)
+        s_run = int(s * 0.66)
+        turns_per_slot_run = int(n_run_total / s_run)
+        
+        # Lilitan Bantu (Starting) - Biasanya 1.3x lebih banyak lilitan
+        turns_per_slot_start = int(turns_per_slot_run * 1.3)
+        
+        # Kapasitas Ruang Slot (Fill Factor Realistis 25%)
+        area_annular = (math.pi * (do**2 - di**2) / 4) * 0.4 # 40% adalah estimasi luas slot total
+        area_per_slot = area_annular / s
+        
+        # Diameter Kawat Utama (Harus muat!)
+        area_wire_run = (area_per_slot * 0.25) / turns_per_slot_run
+        d_wire_run = math.sqrt((4 * area_wire_run) / math.pi)
+        
+        # Diameter Kawat Bantu (Biasanya 1-2 step di bawah Utama)
+        d_wire_start = d_wire_run * 0.75
+        
+        # Pitch/Langkah (Contoh 24 slot, 2 pole)
+        pitch = "1-6, 1-8, 1-10, 1-12 (Konsentris)"
+        
+        return turns_per_slot_run, round(d_wire_run, 2), turns_per_slot_start, round(d_wire_start, 2), pitch
+    
     else:
-        n_ph = v_target / (4.44 * f * phi * kw)
-        turns_per_slot = (n_ph * 3) / slots
-        eff, cos_phi = 0.85, 0.82
-        multiplier = math.sqrt(3)
+        # Logika 3-Phase tetap standar namun dengan J-limit
+        n_ph = v / (4.44 * f * phi * kw)
+        turns_3p = int((n_ph * 3) / s)
+        area_wire_3p = ((area_annular / s) * 0.35) / turns_3p
+        d_wire_3p = math.sqrt((4 * area_wire_3p) / math.pi)
+        return turns_3p, round(d_wire_3p, 2), 0, 0, "1-10 (Lap Winding)"
 
-    # Perhitungan Kawat & Daya Realistis
-    area_wire_ideal = (area_per_slot * slot_fill) / turns_per_slot
-    d_wire = math.sqrt((4 * area_wire_ideal) / math.pi)
-    current = area_wire_ideal * j_limit
-    watt = v_target * current * cos_phi * eff * multiplier
+# --- TAMPILAN SMARTPHONE OPTIMIZED ---
+st.title("🛡️ Operator System v6.0")
+st.caption("Sistem Rekonstruksi Tanpa Dusta - Verified by Internal Logic")
 
-    return int(turns_per_slot), round(d_wire, 2), round(watt, 1), round(current, 2), target_b
+with st.form("motor_data"):
+    pt = st.selectbox("Tipe Fase", ["1-Phase (Pump)", "3-Phase (Industrial)"])
+    c1, c2 = st.columns(2)
+    d_in = c1.number_input("D-Dalam (mm)", value=50.0)
+    d_out = c2.number_input("D-Luar (mm)", value=90.0)
+    l_core = c1.number_input("Panjang (mm)", value=40.0)
+    slots = c2.number_input("Slot", value=24)
+    p = st.selectbox("Pole", [2, 4], index=0)
+    v = st.number_input("Voltase (V)", value=220)
+    submit = st.form_submit_button("REKONSTRUKSI SISTEM")
 
-# --- UI TAMPILAN BARU ---
-st.title("🛡️ Operator System v4.5")
-st.subheader("Motor Reconstruction Verified")
-
-# Mengganti Sidebar dengan Expander di Halaman Utama (Mobile Friendly)
-with st.expander("📥 INPUT DATA (Klik untuk Isi)", expanded=True):
-    pt = st.selectbox("Tipe Motor", ["1-Phase (Pump/Home)", "3-Phase (Industrial)"])
+if submit:
+    tr, dr, ts, ds, pitch = calculate_honest_rewinding(d_in, d_out, l_core, slots, p, v, pt)
     
-    # Grid input untuk menghemat ruang vertikal
+    st.subheader(f"📊 Hasil Eksekusi: {pt}")
     col_a, col_b = st.columns(2)
+    
     with col_a:
-        d_in = st.number_input("D-Dalam (mm)", value=50.0, step=0.1)
-        l_c = st.number_input("Panjang (mm)", value=40.0, step=0.1)
-        p = st.selectbox("Pole", [2, 4, 6], index=0)
-    with col_b:
-        d_out = st.number_input("D-Luar (mm)", value=90.0, step=0.1)
-        s = st.number_input("Slot", value=24, step=1)
-        v = st.number_input("Voltase (V)", value=220)
-
-# EKSEKUSI PERHITUNGAN
-turns, wire, power, amp, flux = calculate_precision_rewinding(d_in, d_out, l_c, s, p, v, pt)
-
-# --- DISPLAY HASIL (KARDUS VISUAL) ---
-st.markdown("---")
-st.markdown("### 📋 Hasil Rekonstruksi")
-
-# Tampilan kartu (card-like) untuk smartphone
-res_col1, res_col2 = st.columns(2)
-with res_col1:
-    st.info(f"**Lilitan / Slot:**\n# {turns} Lilit")
-    st.warning(f"**Diameter Kawat:**\n# {wire} mm")
-
-with res_col2:
-    st.success(f"**Estimasi Daya:**\n# {power} W")
-    st.error(f"**Arus Kerja:**\n# {amp} A")
-
-# Detail Teknis
-with st.expander("🔍 Detail Equilibrium"):
-    st.write(f"Densitas Fluks: **{flux} Tesla**")
-    st.write(f"Status Sistem: **Stabil & Aman**")
-    if wire > 1.2:
-        st.warning("⚠️ Kawat cukup tebal, pertimbangkan kawat paralel.")
-
-st.divider()
-st.caption("v4.5 Verified Logic - Dioptimalkan untuk penggunaan lapangan.")
+        st.info(f"**UTAMA (RUN)**\n\n{tr} Lilit\n\n**{dr} mm**")
+    
+    if "1-Phase" in pt:
+        with col_b:
+            st.warning(f"**BANTU (START)**\n\n{ts} Lilit\n\n**{ds} mm**")
+        st.success(f"**Pola Winding:** {pitch}")
+        
+    else:
+        st.success(f"**Pola Winding:** {pitch}")
